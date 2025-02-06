@@ -14,25 +14,27 @@ as_RowDataAndFormat <- function(df,
   # Helper to apply formatting to a cell
   format_cell <- function(value, format_data) {
     cell <- list(userEnteredValue = list())
-    
-    # Handle different value types
-    if (is.numeric(value)) {
+
+    # Handle NA values explicitly
+    if (is.na(value)) {
+      cell$userEnteredValue <- NULL  # Google Sheets will treat it as an empty cell
+    } else if (is.numeric(value)) {
       cell$userEnteredValue$numberValue <- value
     } else if (inherits(value, "Date")) {
-      cell$userEnteredValue$numberValue <- as.numeric(value) # Dates are stored as numbers
+      cell$userEnteredValue$numberValue <- as.numeric(value)
     } else if (inherits(value, "POSIXt")) {
-      cell$userEnteredValue$numberValue <- as.numeric(value) / 86400 + 25569  # Convert to Google Sheets timestamp
+      cell$userEnteredValue$numberValue <- as.numeric(value) / 86400 + 25569
     } else if (is.logical(value)) {
       cell$userEnteredValue$boolValue <- value
     } else {
       cell$userEnteredValue$stringValue <- as.character(value)
     }
-    
-    # Apply userEnteredFormat if available
+
+    # Apply formatting if available
     if (!is.null(format_data)) {
       cell$userEnteredFormat <- format_data
     }
-    
+
     return(cell)
   }
 
