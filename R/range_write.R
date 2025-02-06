@@ -106,7 +106,8 @@ range_write <- function(ss,
                         sheet = NULL,
                         range = NULL,
                         col_names = TRUE, # not sure about this default
-                        reformat = TRUE) {
+                        reformat = TRUE,
+                        maintain_formatting = TRUE) {
   ssid <- as_sheets_id(ss)
   check_data_frame(data)
   maybe_sheet(sheet)
@@ -135,6 +136,7 @@ range_write <- function(ss,
 
   # figure out if we need to resize the sheet ----------------------------------
   dims_needed <- prepare_dims(loc, data, col_names)
+  # print(dims_needed)
   resize_req <- prepare_resize_request(
     s,
     nrow_needed = dims_needed$nrow,
@@ -155,14 +157,61 @@ range_write <- function(ss,
     requests <- c(requests, list(resize_req))
   }
 
+  # Extract formatting options with defaults -----------------------------------
+  # Convert `loc` to an A1-style range string
+  range_string <- get_data_range(loc, dims_needed)
+  read_result <- range_read_cells(ss, sheet=sheet, range = range_string, cell_data = "full", discard_empty = FALSE)
+
+  # Extract cell formatting
+  start_row <- loc$start$rowIndex + 1
+  start_col <- loc$start$columnIndex + 1
+  nrows <- nrow(data) + if (col_names) 1 else 0
+  ncols <- ncol(data)
+
+  # Initialize cell_formats as a matrix with nrows x ncols
+  cell_formats <- matrix(list(), nrow = nrows, ncol = ncols)
+
+  if (maintain_formatting) {
+    # Populate cell_formats from read_result
+    for (i in seq_along(read_result$cell)) {
+      abs_row <- read_result$row[i]  
+      abs_col <- read_result$col[i]  
+
+      rel_row <- abs_row - start_row + 1
+      rel_col <- abs_col - start_col + 1
+
+      if (rel_row >= 1 && rel_row <= nrows && rel_col >= 1 && rel_col <= ncols) {
+        if (!is.null(read_result$cell[[i]]$userEnteredFormat)) {
+          cell_formats[rel_row, rel_col] <- list(read_result$cell[[i]]$userEnteredFormat)
+        } else {
+          cell_formats[rel_row, rel_col] <- list(NULL)
+        }
+      }
+    }
+
+    # Ensure all missing columns are explicitly set to NULL
+    for (r in seq_len(nrows)) {
+      for (c in seq_len(ncols)) {
+        if (is.null(cell_formats[r, c][[1]])) {  # Unlist first element before checking
+          cell_formats[r, c] <- list(NULL)  # Explicitly reset missing values
+        }
+      }
+    }
+  }
+
   # pack the data, specify field mask ------------------------------------------
-  fields <- if (reformat) "userEnteredValue,userEnteredFormat" else "userEnteredValue"
+  fields <- "userEnteredValue,userEnteredFormat"
   data_req <- new(
     "UpdateCellsRequest",
-    rows = as_RowData(data, col_names = col_names),
+    rows = as_RowDataAndFormat(
+      data, 
+      col_names = col_names,
+      cell_formats = cell_formats
+      ),
     fields = fields,
     !!!loc
   )
+
   requests <- c(requests, list(list(updateCells = data_req)))
 
   # do it ----------------------------------------------------------------------
@@ -226,4 +275,32 @@ prepare_dims <- function(write_loc, data, col_names) {
     ncol = gr$endColumnIndex %||%
       ((gr$startColumnIndex %||% 0) + ncol(data))
   )
+}
+
+get_data_range <- function(loc, dims_needed) {
+  # Extract start row and column (convert from zero-based index)
+  row_start <- loc$start$rowIndex + 1
+  col_start <- loc$start$columnIndex + 1
+
+  # Extract required end row and column from dims_needed
+  row_end <- dims_needed$nrow
+  col_end <- dims_needed$ncol
+
+  # Convert column indices to letters
+  col_start_letter <- int_to_col(col_start)
+  col_end_letter <- int_to_col(col_end)
+
+  # Return the computed A1 notation range
+  return(paste0(col_start_letter, row_start, ":", col_end_letter, row_end))
+}
+
+# Helper function to convert column index to A1 notation (e.g., 1 -> A, 2 -> B, ..., 27 -> AA)
+int_to_col <- function(col) {
+  result <- ""
+  while (col > 0) {
+    remainder <- (col - 1) %% 26  # Get remainder (0-based index)
+    result <- paste0(LETTERS[remainder + 1], result)  # Prepend character
+    col <- (col - 1) %/% 26  # Reduce col for next iteration
+  }
+  return(result)
 }
